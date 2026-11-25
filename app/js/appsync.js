@@ -37,6 +37,33 @@ export async function startSync() {
   await sync.start({ allowRedirect: true, onStatus: st => syncUI.render(st) });
 }
 
+// Repair: list the OneDrive folder in full (not through the saved change feed), open every file,
+// and keep anything newer than this device's copy. Returns { got, same, bad: [reasons] }.
+// deps lets the test pass a pretend drive; normally it uses InkNotes' OneDrive code and key.
+export async function repair(deps = null) {
+  if (!deps) {
+    const [{ graphDrive }, { unsealJSON }, ink] = await Promise.all([import("/inknotes/js/graph.js"), import("/inknotes/js/crypt.js"), import("/inknotes/js/store.js")]);
+    const key = await ink.store.getMeta("key");
+    if (!key) throw new Error("This device doesn't have the sync passphrase yet. Tap ☁️ to enter it.");
+    deps = { drive: graphDrive, unsealJSON, key, st: store };
+  }
+  const { drive, unsealJSON, key, st } = deps;
+  const files = (await drive.list("dimelo")).filter(f => f.name.endsWith(".json"));
+  let got = 0, same = 0, next = 0;
+  const bad = [];
+  const one = async f => {
+    const id = fromDriveId(f.name.slice(0, -5));
+    try {
+      const r = await unsealJSON(key, await drive.read("dimelo", f.name, f), "dimelo/" + f.name);
+      if (!r || fromDriveId(r.id || "") !== id) { bad.push(`${f.name}: the record inside is named “${r && r.id}”`); return; }
+      const l = st.get(id);
+      if (!l || (r.updated || 0) > (l.updated || 0)) { await st.put({ ...r, id }, { fromSync: true }); got++; } else same++;
+    } catch (e) { bad.push(`${f.name}: ${e.name === "OperationError" ? "couldn't decrypt (different passphrase?)" : e.message}`); }
+  };
+  await Promise.all(Array.from({ length: 6 }, async () => { while (next < files.length) await one(files[next++]); }));
+  return { got, same, bad };
+}
+
 // Me → Sync details: what this device has, what OneDrive has, and buttons to sync or re-download.
 // Run it on two devices to see which one is out of step.
 const when = t => (t ? new Date(t).toLocaleString() : "never");
@@ -58,7 +85,18 @@ export async function renderSyncDetails(box, version) {
     await ink.store.deleteMeta("syncState:dimelo");
     sync.now(); setTimeout(() => renderSyncDetails(box, version), 6000);
   } }, "Re-check everything");
-  box.replaceChildren(...rows, el("div", { class: "row" }, now, again));
+  const out = el("div", { class: "small" });
+  const fix = el("button", { class: "btn small go", onclick: async () => {
+    fix.disabled = true; out.textContent = "Checking every file in OneDrive…";
+    try {
+      const r = await repair();
+      out.replaceChildren(el("p", {}, `Downloaded ${r.got} · already up to date ${r.same}` + (r.bad.length ? ` · couldn't use ${r.bad.length}:` : "")),
+        ...r.bad.slice(0, 8).map(b => el("div", { class: "muted" }, "• " + b)));
+      if (r.got) out.append(el("p", {}, "Your progress is updated. Check the Learn tab."));
+    } catch (e) { out.textContent = "Couldn't check: " + e.message; }
+    fix.disabled = false;
+  } }, "Download what's missing");
+  box.replaceChildren(...rows, el("div", { class: "row" }, fix, now, again), out);
   if (!acct) return;
   try {
     const { graphDrive } = await import("/inknotes/js/graph.js");

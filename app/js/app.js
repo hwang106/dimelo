@@ -11,7 +11,7 @@ import { strength } from "./srs.js";
 import { startSync, renderSyncDetails } from "./appsync.js";
 import { RESEARCH } from "./research.js";
 
-export const VERSION = "2026-11-25.5";   // bump with every published change; shown in Me
+export const VERSION = "2026-11-25.6";   // bump with every published change; shown in Me
 const view = $("#view");
 let tab = "learn";
 try { tab = sessionStorage.getItem("dimelo-tab") || "learn"; } catch (_) {}
@@ -186,7 +186,13 @@ async function init() {
   audio.setSfx(store.settings().sounds);
   const used = await P.applyFreezes();
   if (used.length) toast(`🧊 A streak freeze covered ${used.length === 1 ? "yesterday" : used.length + " days"}. Streak saved!`, 6000);
-  store.onChange((_, fromSync) => { if (fromSync && !document.body.classList.contains("in-lesson")) { renderTop(); if (tab !== "clips" && tab !== "partner") show(tab); } });
+  // synced records: redraw once things settle (not on Me, which would wipe the sync details panel)
+  let redraw = 0;
+  store.onChange((_, fromSync) => {
+    if (!fromSync || document.body.classList.contains("in-lesson")) return;
+    clearTimeout(redraw);
+    redraw = setTimeout(() => { renderTop(); if (tab === "learn" || tab === "practice") show(tab); }, 300);
+  });
   show(tab);
   if (!store.all("lesson:").length && !localStorage.getItem("dimelo-welcomed")) welcome();
   startSync().catch(() => {});

@@ -57,3 +57,21 @@ await syncOnce({ drive, local: localAdapter(pc), key, state: pcState, folder: "d
 await syncOnce({ drive, local: localAdapter(phone), key, state: phoneState, folder: "dimelo", images: false });
 assert.equal(phone.m.get("settings").speed, 1.25);
 console.log("ok - newer settings edit reaches the other device");
+
+// Repair: a device that "synced" but is missing a file gets it by listing the folder in full.
+{
+  const { repair } = await import("../app/js/appsync.js");
+  const { sealJSON, unsealJSON } = await import("../../InkNotes/app/js/crypt.js");
+  const d = strictDrive();
+  await d.write("dimelo", "lesson~u-s~0.json", await sealJSON(key, { id: "lesson~u-s~0", best: 100, updated: 200 }, "dimelo/lesson~u-s~0.json"));
+  await d.write("dimelo", "settings.json", await sealJSON(key, { id: "settings", goal: 30, updated: 50 }, "dimelo/settings.json"));
+  const otherKey = (await newKeyFile("some other passphrase")).key;
+  await d.write("dimelo", "day~2026-11-25~ph0ne.json", await sealJSON(otherKey, { id: "day~2026-11-25~ph0ne", xp: 40, updated: 210 }, "dimelo/day~2026-11-25~ph0ne.json"));
+  await d.write("dimelo", "card~x~rec.json", await sealJSON(key, { id: "card~y~rec", updated: 220 }, "dimelo/card~x~rec.json"));
+  const surface = device([{ id: "settings", goal: 50, updated: 300 }]);
+  const r = await repair({ drive: d, unsealJSON, key, st: surface });
+  assert.equal(r.got, 1); assert.equal(r.same, 1); assert.equal(r.bad.length, 2);
+  assert.equal(surface.m.get("lesson:u-s:0").best, 100);
+  assert.equal(surface.m.get("settings").goal, 50, "newer local settings kept");
+  console.log("ok - repair downloads the missing lesson, keeps newer local data, reports:", r.bad.join(" | "));
+}
