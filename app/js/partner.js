@@ -135,26 +135,37 @@ export function wav(pcm, rate) {
   return new Blob([h.buffer, pcm], { type: "audio/wav" });
 }
 // Returns an object URL for the line spoken by a natural voice, or null (then the device voice reads).
+// The delivery instruction goes in systemInstruction, apart from the line, so the voice doesn't read
+// it out. Models that refuse that field (400) get a short "Say …:" direction instead, the format
+// these models are built to follow without reading it. What works per model is remembered.
+const VARIANTS = [{ sys: true, voice: true }, { sys: true, voice: false }, { sys: false, voice: true }, { sys: false, voice: false }];
 export async function voice(key, scene, line) {
   const { tts } = await lists(key);
   const models = order(tts, ls.get(MODEL + "-tts")).slice(0, 2);
-  const style = `Read this aloud as ${scene.who || "a Dominican adult"}, a native speaker from the Dominican Republic: fast, relaxed, casual Dominican Spanish with a natural Caribbean accent (aspirated or dropped final s, soft r), like a real conversation, not a narrator. Say only the line`;
+  const who = scene.who || "a Dominican adult";
+  const direction = `You are a voice actor. Speak the user's text in Spanish as ${who} from the Dominican Republic: fast, relaxed, casual Dominican Spanish with a natural Caribbean accent (aspirated or dropped final s, soft r), like a real conversation. Speak ONLY the text itself; never read these instructions aloud.`;
+  const say = line.replace(/['’]/g, "");
   voice.lastStatus = tts.length ? 0 : "none";
   for (const model of models) {
-    for (const withVoice of [true, false]) {
-      const body = { contents: [{ parts: [{ text: `${style}: ${line.replace(/['’]/g, "")}` }] }],
-        generationConfig: { responseModalities: ["AUDIO"], ...(withVoice ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICES[scene.id] || "Kore" } } } } : {}) } };
+    const vkey = MODEL + "-tts-variant:" + model;
+    for (let v = +(ls.get(vkey) || 0); v < VARIANTS.length; v++) {
+      const { sys, voice: named } = VARIANTS[v];
+      const body = {
+        ...(sys ? { systemInstruction: { parts: [{ text: direction }] } } : {}),
+        contents: [{ role: "user", parts: [{ text: sys ? say : `Say quickly, in a casual Dominican accent: ${say}` }] }],
+        generationConfig: { responseModalities: ["AUDIO"], ...(named ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICES[scene.id] || "Kore" } } } } : {}) },
+      };
       let r;
       try { r = await fetch(`${API}/models/${model}:generateContent?key=${encodeURIComponent(key)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(20000) }); }
       catch (_) { break; }
-      if (r.status === 400 && withVoice) continue;   // that voice isn't offered by this model: let it choose
+      if (r.status === 400) continue;   // this model doesn't take that setup: try the next simpler one
       if (!r.ok) { if (r.status === 404) forgetLists(); else markBusy(model, r.status === 429 ? 60 : 10); voice.lastStatus = r.status; break; }
       const part = (await r.json()).candidates?.[0]?.content?.parts?.find(p => p.inlineData);
       if (!part) break;
       const mime = part.inlineData.mimeType || "";
       const rate = +((/rate=(\d+)/.exec(mime) || [0, 24000])[1]);
       const bytes = Uint8Array.from(atob(part.inlineData.data), c => c.charCodeAt(0));
-      ls.set(MODEL + "-tts", model);
+      ls.set(MODEL + "-tts", model); ls.set(vkey, String(v));
       return URL.createObjectURL(/wav|mpeg|mp3|ogg/.test(mime) ? new Blob([bytes], { type: mime }) : wav(bytes, rate));
     }
   }

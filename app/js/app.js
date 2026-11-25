@@ -11,7 +11,7 @@ import { strength } from "./srs.js";
 import { startSync, renderSyncDetails } from "./appsync.js";
 import { RESEARCH } from "./research.js";
 
-export const VERSION = "2026-11-25.9";   // bump with every published change; shown in Me
+export const VERSION = "2026-11-25.10";   // bump with every published change; shown in Me
 const view = $("#view");
 let tab = "learn";
 try { tab = sessionStorage.getItem("dimelo-tab") || "learn"; } catch (_) {}
