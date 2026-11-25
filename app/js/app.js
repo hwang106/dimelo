@@ -8,10 +8,10 @@ import { runDialogue } from "./dialogue.js";
 import { renderClips } from "./clips.js";
 import { renderPartner } from "./partner.js";
 import { strength } from "./srs.js";
-import { startSync } from "./appsync.js";
+import { startSync, renderSyncDetails } from "./appsync.js";
 import { RESEARCH } from "./research.js";
 
-export const VERSION = "2026-11-25.4";   // bump with every published change; shown in Me
+export const VERSION = "2026-11-25.5";   // bump with every published change; shown in Me
 const view = $("#view");
 let tab = "learn";
 try { tab = sessionStorage.getItem("dimelo-tab") || "learn"; } catch (_) {}
@@ -161,6 +161,7 @@ function renderMe() {
       toggle("showVulgar", "Include vulgar words and slurs (recognize only)", "So you know what students are saying. Never in speaking drills."),
       toggle("unlockAll", "Unlock everything", "Skip ahead on the path"),
       el("div", { class: "row" }, el("button", { id: "syncBtn2", class: "btn small", hidden: true }, "OneDrive sync"), el("button", { class: "btn small ghost", onclick: cacheAudio }, "Download audio for offline"))),
+    (() => { const box = el("div", {}, el("button", { class: "btn small ghost", onclick: () => renderSyncDetails(box, VERSION) }, "Show sync details")); return el("div", { class: "card" }, el("h2", {}, "Sync details"), box); })(),
     el("div", { class: "card research" }, el("h2", {}, "Why it works"), ...RESEARCH.map(r => el("details", {}, el("summary", {}, r.title), el("p", {}, r.body), el("p", { class: "cite" }, r.cite)))),
     el("p", { class: "muted small center" }, `Version ${VERSION} · `, "Audio: Microsoft neural voices (es-DO Emilio and Ramona). Content is a starting point; fix anything that sounds off in js/content.js."));
   const s2 = $("#syncBtn"); const b2 = $("#syncBtn2");

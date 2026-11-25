@@ -203,3 +203,5 @@ main .chat { min-height: 50vh; padding: 0; }
 #toast { position: fixed; left: 50%; bottom: 96px; transform: translate(-50%, 20px); opacity: 0; transition: .25s; background: var(--fg); color: var(--bg); padding: 12px 18px; border-radius: 14px; z-index: 50; max-width: calc(100vw - 32px); pointer-events: none; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 @media (max-width: 400px) { .node-wrap { transform: translateX(calc(var(--x) * 32px)); } .chip { padding: 4px 4px; } .brand span { display: none; } }
+.kv { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.kv span { color: var(--muted); } .kv b { text-align: right; }
