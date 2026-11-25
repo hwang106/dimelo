@@ -34,7 +34,7 @@ async function candidates(key) {
   let list = [];
   try { list = JSON.parse(ls.get(MODEL + "-list") || "[]"); } catch (_) {}
   if (!list.length) {
-    const r = await fetch(`${API}/models?key=${encodeURIComponent(key)}&pageSize=200`);
+    const r = await fetch(`${API}/models?key=${encodeURIComponent(key)}&pageSize=200`, { signal: AbortSignal.timeout(15000) });
     if (r.status === 400 || r.status === 403) throw new Error("Google didn't accept this key. Check it in AI Studio, or remove it below and paste it again.");
     if (!r.ok) throw new Error("Couldn't reach Gemini (" + r.status + "). Try again in a minute.");
     const { models = [] } = await r.json();
@@ -58,8 +58,8 @@ export async function ask(key, scene, history, onTry = () => {}) {
     for (let attempt = 0; attempt < 2; attempt++) {
       onTry(model, attempt);
       let r;
-      try { r = await fetch(`${API}/models/${model}:generateContent?key=${encodeURIComponent(key)}`, { method: "POST", headers: { "content-type": "application/json" }, body }); }
-      catch (_) { last = "network"; await wait(1500); continue; }
+      try { r = await fetch(`${API}/models/${model}:generateContent?key=${encodeURIComponent(key)}`, { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(25000) }); }
+      catch (e) { last = e.name === "TimeoutError" ? "timeout" : "network"; if (last === "timeout") break; await wait(1500); continue; }
       if (r.ok) {
         ls.set(MODEL, model);
         const j = await r.json();
@@ -74,7 +74,7 @@ export async function ask(key, scene, history, onTry = () => {}) {
     }
   }
   throw new Error(last === 429 ? "Free-tier limit reached on every model for now. Try again in a few minutes."
-    : last === "network" ? "No connection to Gemini. Check your internet." : "Gemini is busy right now (" + last + "). Try again in a minute.");
+    : last === "network" ? "No connection to Gemini. Check your internet." : last === "timeout" ? "Gemini is taking too long right now. Try again in a minute." : "Gemini is busy right now (" + last + "). Try again in a minute.");
 }
 
 export function renderPartner(view) {

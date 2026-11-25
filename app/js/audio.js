@@ -52,7 +52,8 @@ export function say(text, { rate = 1 } = {}) {
   const v = bestVoice();
   if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "es-US";
   u.rate = rate;
-  return new Promise(res => { u.onend = u.onerror = () => res(); speechSynthesis.speak(u); });
+  // Chrome can drop an utterance queued right after cancel(), so give it a moment
+  return new Promise(res => { u.onend = u.onerror = () => res(); setTimeout(() => speechSynthesis.speak(u), 80); });
 }
 
 // ---- speech recognition ----
