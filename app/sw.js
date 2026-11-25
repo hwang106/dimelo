@@ -1,6 +1,6 @@
 // Offline support: the app shell is cached on install (and refreshed in the background);
 // audio clips are cached the first time they play (or all at once from Me → Download audio).
-const SHELL = "dimelo-shell-v2", AUDIO = "dimelo-audio";
+const SHELL = "dimelo-shell-v3", AUDIO = "dimelo-audio";
 const FILES = ["./", "index.html", "styles.css", "manifest.webmanifest", "icons/icon.svg", "audio/manifest.json",
   ...["app", "audio", "content", "lesson", "dialogue", "clips", "partner", "progress", "srs", "match", "store", "ui", "research", "appsync"].map(f => `js/${f}.js`)];
 
@@ -15,9 +15,10 @@ self.addEventListener("fetch", e => {
     e.respondWith(caches.open(AUDIO).then(async c => (await c.match(e.request)) || fetch(e.request).then(r => { if (r.ok) c.put(e.request, r.clone()); return r; })));
     return;
   }
-  // network first (so updates show up on the next open), the saved copy when offline or slow
+  // network first, checking with the server every time (GitHub Pages lets browsers reuse files for
+  // 10 minutes otherwise), so updates show up on the next open; the saved copy when offline or slow
   e.respondWith(caches.open(SHELL).then(async c => {
-    const net = fetch(e.request).then(r => { if (r.ok) c.put(e.request, r.clone()); return r; });
+    const net = fetch(e.request, { cache: "no-cache" }).then(r => { if (r.ok) c.put(e.request, r.clone()); return r; });
     const slow = new Promise(res => setTimeout(res, 4000)).then(() => c.match(e.request, { ignoreSearch: true }));
     try { return (await Promise.race([net, slow])) || (await net); }
     catch (_) { return (await c.match(e.request, { ignoreSearch: true })) || Response.error(); }

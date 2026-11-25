@@ -11,6 +11,7 @@ import { strength } from "./srs.js";
 import { startSync } from "./appsync.js";
 import { RESEARCH } from "./research.js";
 
+export const VERSION = "2026-11-25.4";   // bump with every published change; shown in Me
 const view = $("#view");
 let tab = "learn";
 try { tab = sessionStorage.getItem("dimelo-tab") || "learn"; } catch (_) {}
@@ -161,7 +162,7 @@ function renderMe() {
       toggle("unlockAll", "Unlock everything", "Skip ahead on the path"),
       el("div", { class: "row" }, el("button", { id: "syncBtn2", class: "btn small", hidden: true }, "OneDrive sync"), el("button", { class: "btn small ghost", onclick: cacheAudio }, "Download audio for offline"))),
     el("div", { class: "card research" }, el("h2", {}, "Why it works"), ...RESEARCH.map(r => el("details", {}, el("summary", {}, r.title), el("p", {}, r.body), el("p", { class: "cite" }, r.cite)))),
-    el("p", { class: "muted small center" }, "Audio: Microsoft neural voices (es-DO Emilio and Ramona). Content is a starting point; fix anything that sounds off in js/content.js."));
+    el("p", { class: "muted small center" }, `Version ${VERSION} · `, "Audio: Microsoft neural voices (es-DO Emilio and Ramona). Content is a starting point; fix anything that sounds off in js/content.js."));
   const s2 = $("#syncBtn"); const b2 = $("#syncBtn2");
   if (s2 && !s2.hidden) { b2.hidden = false; b2.onclick = () => s2.click(); }
 }
@@ -189,7 +190,16 @@ async function init() {
   if (!store.all("lesson:").length && !localStorage.getItem("dimelo-welcomed")) welcome();
   startSync().catch(() => {});
   // offline cache on the real site only, so local testing always runs fresh code
-  if ("serviceWorker" in navigator && location.hostname !== "localhost") navigator.serviceWorker.register("sw.js").catch(() => {});
+  if ("serviceWorker" in navigator && location.hostname !== "localhost") {
+    // when a new version takes over, reload so the new code runs (but never in the middle of a lesson)
+    const had = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!had) return;
+      if (document.body.classList.contains("in-lesson")) toast("Dímelo was updated. It'll use the new version next time you open it.");
+      else location.reload();
+    });
+    navigator.serviceWorker.register("sw.js").then(r => r.update()).catch(() => {});
+  }
 }
 function welcome() {
   const d = el("dialog", { class: "sheet" },
