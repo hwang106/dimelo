@@ -207,3 +207,12 @@ main .chat { min-height: 50vh; padding: 0; }
 .kv { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .kv span { color: var(--muted); } .kv b { text-align: right; }
 .b-status { font-size: .75rem; color: var(--muted); margin-left: auto; }
+
+/* Talk feedback under your own message */
+.coach.me { align-self: flex-end; max-width: 88%; margin: -4px 0 4px; padding: 8px 12px; border: 0; border-radius: 12px; background: var(--bg2); border-left: 4px solid var(--gold); font-weight: 400; color: var(--fg); display: grid; gap: 6px; font-size: .9rem; }
+.coach.me.good { border-left-color: var(--good-fg); }
+.c-tag { display: inline-block; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 6px; background: var(--sel); color: var(--blue-d); }
+.c-tag.t-grammar { background: #ffe3e3; color: #a3242a; } .c-tag.t-register { background: #efe3ff; color: #6a2bb3; }
+.c-better { display: flex; align-items: center; gap: 6px; } .c-better small { color: var(--muted); font-weight: 700; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .c-tag.t-grammar { background: #4a1f22; color: #ffb3b6; } :root:not([data-theme="light"]) .c-tag.t-register { background: #33224d; color: #d9c2ff; } :root:not([data-theme="light"]) .c-tag { color: #9fdcff; } }
+:root[data-theme="dark"] .c-tag.t-grammar { background: #4a1f22; color: #ffb3b6; } :root[data-theme="dark"] .c-tag.t-register { background: #33224d; color: #d9c2ff; } :root[data-theme="dark"] .c-tag { color: #9fdcff; }

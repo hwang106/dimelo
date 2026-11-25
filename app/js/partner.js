@@ -1,6 +1,7 @@
 // Optional AI conversation partner on Google's free Gemini tier. Your key stays in this
 // browser only (never synced). You talk (mic) or type; it answers in character, in fast Dominican
-// Spanish, read aloud, plus a short coaching note in English.
+// Spanish, read aloud, and gives feedback on each of your messages: grammar, word choice, register
+// (does it sound right for this person and situation), plus a more natural way to say it.
 import { el, toast } from "./ui.js";
 import * as audio from "./audio.js";
 import * as P from "./progress.js";
@@ -24,7 +25,21 @@ The learner is an American middle school teacher in Washington Heights (NYC) wit
 Rules:
 - Stay in character. Speak like a real Dominican: dropped s ('tá, 'tamo', lo' muchacho'), pa', na', to', -ao for -ado, r→l or r→i where natural, non-inverted questions (¿Qué tú quieres?), and real Dominican words. Write the Spanish the way it is pronounced, using apostrophes for dropped sounds.
 - Keep each reply short: 1–3 sentences, like real conversation. Ask questions back so the learner has to talk.
-- Reply ONLY with JSON: {"reply": "<your line in Dominican Spanish>", "standard": "<the same line in standard written Spanish>", "en": "<English translation>", "coach": "<one short note in English about the learner's last message: a mistake, a more natural Dominican way to say it, or praise. Empty for your first line>"}`;
+- Also act as the learner's coach on their LAST message (none for your first line). Check three things:
+  grammar: real errors (agreement, tense, mood, ser/estar, por/para, prepositions, gender).
+  word: wrong or unnatural word choice, false friends, anglicisms a Dominican wouldn't use, or a more natural Dominican word or phrase.
+  register: does it fit THIS person and moment for a teacher? With parents: respectful and warm (usted, "Doña"/"Don", "mire", "con mucho gusto"); tú with a parent you just met sounds too familiar. With students: tú and light slang are fine, but a teacher shouldn't use vulgar slang, and too-formal speech sounds stiff. At the colmado: casual is right.
+  Only flag what matters (at most 3 notes, most important first). Don't nitpick, don't invent errors, and give praise when it's genuinely natural.
+  The learner often talks through speech recognition: ignore punctuation, capital letters and missing accent marks, and treat a word that looks like a mis-hearing as probably fine. Mixing in some English is normal in Washington Heights; mention it only if this listener wouldn't follow it.
+- Reply ONLY with JSON:
+{"reply": "<your line in Dominican Spanish>",
+ "standard": "<the same line in standard written Spanish>",
+ "en": "<English translation>",
+ "feedback": {"ok": <true if the learner's message was clear, correct and right for the situation>,
+   "notes": [{"type": "grammar" | "word" | "register", "text": "<short note in English, quoting the words in question>"}],
+   "praise": "<if ok, a few words on what worked; else empty>",
+   "better": "<how a bilingual Dominican-raised teacher would naturally say the learner's message here, same meaning; empty if it was already natural>"}}
+For your first line, "feedback" is null.`;
 }
 
 // ---- which models to use ----
@@ -89,7 +104,7 @@ async function askOne(key, model, payload, signal) {
 // on. The first good answer wins and the others are cancelled. Worst case 30 s, usually a few.
 export async function ask(key, scene, history, onSlow = () => {}) {
   const models = order((await lists(key)).chat, ls.get(MODEL)).slice(0, 3);
-  const payload = { systemInstruction: { parts: [{ text: system(scene) }] }, contents: history, generationConfig: { responseMimeType: "application/json", temperature: 0.9, maxOutputTokens: 400 } };
+  const payload = { systemInstruction: { parts: [{ text: system(scene) }] }, contents: history, generationConfig: { responseMimeType: "application/json", temperature: 0.9, maxOutputTokens: 900 } };
   const ctl = new AbortController();
   const stop = setTimeout(() => ctl.abort(), 30e3);
   let fails = 0, lastErr = "";
@@ -114,7 +129,7 @@ export async function ask(key, scene, history, onSlow = () => {}) {
     });
     ls.set(MODEL, won.model);
     const text = won.j.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "{}";
-    try { return JSON.parse(text); } catch (_) { return { reply: text, standard: "", en: "", coach: "" }; }
+    try { return JSON.parse(text); } catch (_) { return { reply: text, standard: "", en: "", feedback: null }; }
   } catch (e) {
     if (e.fatal) throw e;
     const m = e.message;
@@ -179,7 +194,7 @@ export function renderPartner(view) {
     const inp = el("input", { type: "password", placeholder: "Paste your Gemini API key", autocomplete: "off" });
     view.replaceChildren(el("h1", {}, "Conversation partner"),
       el("div", { class: "card" },
-        el("p", {}, "Free and optional. It plays a Dominican parent, student or neighbor, talks back in fast Dominican Spanish, and coaches you in English after each reply."),
+        el("p", {}, "Free and optional. It plays a Dominican parent, student or neighbor, talks back in fast Dominican Spanish, and gives you feedback on each thing you say: grammar, word choice, and whether it fits the person you're talking to."),
         el("ol", {},
           el("li", {}, "Go to ", el("a", { href: "https://aistudio.google.com/apikey", target: "_blank", rel: "noopener" }, "Google AI Studio → Get API key"), " with your personal Google account."),
           el("li", {}, "Create a key (free tier, no card needed) and paste it here. You type it yourself; it's kept only in this browser.")),
@@ -202,8 +217,22 @@ function chat(view, scene, key) {
   let turns = 0;
   view.replaceChildren(el("button", { class: "link", onclick: () => { finish(); renderPartner(view); } }, "← Situations"), el("h2", {}, scene.title), log,
     el("div", { class: "composer" }, audio.canListen ? mic : null, inp, send));
-  let warned = false;
+  let warned = false, lastMe = null;
+  // feedback on what you said, shown under your own bubble
+  const TAG = { grammar: "Grammar", word: "Word choice", register: "Register" };
+  const coach = (bubble, f, old) => {
+    if (!bubble || (!f && !old)) return;
+    if (!f || typeof f !== "object") return bubble.after(el("div", { class: "coach me" }, "💬 " + (old || f)));
+    const notes = (Array.isArray(f.notes) ? f.notes : []).filter(n => n && n.text).slice(0, 3);
+    const box = el("div", { class: "coach me" + (f.ok && !notes.length ? " good" : "") },
+      f.ok && !notes.length ? el("div", {}, "✅ " + (f.praise || "Natural and right for the situation.")) : null,
+      ...notes.map(n => el("div", { class: "c-note" }, el("span", { class: "c-tag t-" + (TAG[n.type] ? n.type : "word") }, TAG[n.type] || "Note"), " " + n.text)),
+      f.better ? el("div", { class: "c-better" }, el("button", { class: "icon-btn", "aria-label": "Hear it", onclick: () => audio.say(f.better) }, "🔊"),
+        el("span", {}, el("small", {}, "More natural: "), f.better)) : null);
+    bubble.after(box);
+  };
   const them = r => {
+    coach(lastMe, r.feedback, r.coach); lastMe = null;
     const txt = el("div", { class: "b-text hidden" }, r.reply, r.standard ? el("div", { class: "b-std" }, r.standard) : null);
     const en = el("div", { class: "b-en hidden" }, r.en);
     const status = el("span", { class: "b-status" }, "voice loading…");
@@ -221,7 +250,7 @@ function chat(view, scene, key) {
         el("button", { class: "icon-btn", "aria-label": "Play slowly", onclick: () => play(0.75) }, "🐢"),
         el("button", { class: "link", onclick: () => txt.classList.toggle("hidden") }, "Text"),
         el("button", { class: "link", onclick: () => en.classList.toggle("hidden") }, "English"), status),
-      txt, en, r.coach ? el("div", { class: "coach" }, "💬 " + r.coach) : null);
+      txt, en);
     log.append(b); b.scrollIntoView({ behavior: "smooth", block: "end" });
     voice(key, scene, r.reply).catch(() => null).then(u => {
       url = u; status.remove();
@@ -234,7 +263,7 @@ function chat(view, scene, key) {
     });
   };
   async function go(text) {
-    if (text) { history.push({ role: "user", parts: [{ text }] }); log.append(el("div", { class: "bubble me" }, text)); turns++; }
+    if (text) { history.push({ role: "user", parts: [{ text }] }); lastMe = el("div", { class: "bubble me" }, text); log.append(lastMe); turns++; }
     else history.push({ role: "user", parts: [{ text: "(Start the conversation with your first line.)" }] });
     send.disabled = true;
     const typing = el("div", { class: "bubble them typing" }, "…"); log.append(typing);
