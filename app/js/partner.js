@@ -136,9 +136,10 @@ export function wav(pcm, rate) {
 }
 // Returns an object URL for the line spoken by a natural voice, or null (then the device voice reads).
 // The delivery instruction goes in systemInstruction, apart from the line, so the voice doesn't read
-// it out. Models that refuse that field (400) get a short "Say …:" direction instead, the format
-// these models are built to follow without reading it. What works per model is remembered.
+// it out. Models that refuse that field (400) get the bare line: any direction placed in the text
+// itself gets read aloud by some models. What works per model is remembered.
 const VARIANTS = [{ sys: true, voice: true }, { sys: true, voice: false }, { sys: false, voice: true }, { sys: false, voice: false }];
+const VARIANT_KEY = MODEL + "-tts-v2:";   // v2: earlier remembered choices spoke a "Say …:" prefix
 export async function voice(key, scene, line) {
   const { tts } = await lists(key);
   const models = order(tts, ls.get(MODEL + "-tts")).slice(0, 2);
@@ -147,12 +148,12 @@ export async function voice(key, scene, line) {
   const say = line.replace(/['’]/g, "");
   voice.lastStatus = tts.length ? 0 : "none";
   for (const model of models) {
-    const vkey = MODEL + "-tts-variant:" + model;
+    const vkey = VARIANT_KEY + model;
     for (let v = +(ls.get(vkey) || 0); v < VARIANTS.length; v++) {
       const { sys, voice: named } = VARIANTS[v];
       const body = {
         ...(sys ? { systemInstruction: { parts: [{ text: direction }] } } : {}),
-        contents: [{ role: "user", parts: [{ text: sys ? say : `Say quickly, in a casual Dominican accent: ${say}` }] }],
+        contents: [{ role: "user", parts: [{ text: say }] }],
         generationConfig: { responseModalities: ["AUDIO"], ...(named ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICES[scene.id] || "Kore" } } } } : {}) },
       };
       let r;
