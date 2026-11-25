@@ -1,0 +1,59 @@
+// Dímelo sync against InkNotes' sync engine with a pretend OneDrive that, like the real one,
+// rejects file names containing ":" (400). Run from the dimelo folder: node test/sync.test.mjs
+// (needs the InkNotes folder next to this one).
+import assert from "node:assert/strict";
+import { syncOnce } from "../../InkNotes/app/js/sync-engine.js";
+import { newKeyFile } from "../../InkNotes/app/js/crypt.js";
+import { localAdapter } from "../app/js/appsync.js";
+
+function strictDrive() {
+  const files = new Map(); let n = 0;
+  return {
+    files,
+    async list(folder) { return [...files].filter(([p]) => p.startsWith(folder + "/")).map(([p, f]) => ({ name: p.slice(folder.length + 1), etag: f.etag })); },
+    async read(folder, name) { const f = files.get(folder + "/" + name); return f ? f.bytes.slice() : null; },
+    async write(folder, name, bytes) {
+      if (/[:"*<>?|]/.test(name)) { const e = new Error("Uploading to OneDrive failed (400)"); e.status = 400; throw e; }
+      const etag = `"e${++n}"`; files.set(folder + "/" + name, { bytes: bytes.slice(), etag }); return { etag };
+    },
+  };
+}
+function device(recs = []) {
+  const m = new Map(recs.map(r => [r.id, structuredClone(r)]));
+  return { m, allRaw: () => [...m.values()], get: id => m.get(id), put: async r => { m.set(r.id, structuredClone(r)); } };
+}
+
+const { key } = await newKeyFile("test passphrase");
+const drive = strictDrive();
+const phone = device([
+  { id: "card:s-donde:rec", s: 3.7, d: 5, last: 1, due: 2, updated: 100 },
+  { id: "day:2026-11-25:ph0ne", xp: 40, lessons: 2, updated: 110 },
+  { id: "lesson:u-s:0", best: 100, updated: 120 },
+  { id: "card:item:abc123:rec", s: 1, d: 5, last: 1, due: 2, updated: 130 },   // phrase from a clip (id has two colons)
+  { id: "settings", goal: 30, speed: 1.1, updated: 140 },
+]);
+const pc = device([{ id: "day:2026-11-24:pc000", xp: 25, lessons: 1, updated: 90 }]);
+const phoneState = {}, pcState = {};
+
+await syncOnce({ drive, local: localAdapter(phone), key, state: phoneState, folder: "dimelo", images: false });
+const names = [...drive.files.keys()].sort();
+assert.ok(names.every(n => !n.slice(7).includes(":")), "no colons in OneDrive names: " + names);
+assert.ok(names.includes("dimelo/card~item~abc123~rec.json"));
+console.log("ok - phone uploads", names.length, "files with safe names");
+
+await syncOnce({ drive, local: localAdapter(pc), key, state: pcState, folder: "dimelo", images: false });
+assert.deepEqual([...pc.m.keys()].sort(), [...phone.m.keys(), "day:2026-11-24:pc000"].sort());
+assert.equal(pc.m.get("card:item:abc123:rec").s, 1);
+console.log("ok - PC gets every record back under its real id, and uploads its own");
+
+await syncOnce({ drive, local: localAdapter(phone), key, state: phoneState, folder: "dimelo", images: false });
+assert.equal(phone.m.get("day:2026-11-24:pc000").xp, 25);
+assert.ok(![...phone.m.keys()].some(k => k.includes("~")), "no ~ ids leak into the app");
+console.log("ok - phone gets the PC's XP; no encoded ids stored locally");
+
+// a newer edit on one device wins on the other
+pc.m.set("settings", { ...pc.m.get("settings"), speed: 1.25, updated: 500 });
+await syncOnce({ drive, local: localAdapter(pc), key, state: pcState, folder: "dimelo", images: false });
+await syncOnce({ drive, local: localAdapter(phone), key, state: phoneState, folder: "dimelo", images: false });
+assert.equal(phone.m.get("settings").speed, 1.25);
+console.log("ok - newer settings edit reaches the other device");
