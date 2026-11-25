@@ -27,32 +27,54 @@ Rules:
 - Reply ONLY with JSON: {"reply": "<your line in Dominican Spanish>", "standard": "<the same line in standard written Spanish>", "en": "<English translation>", "coach": "<one short note in English about the learner's last message: a mistake, a more natural Dominican way to say it, or praise. Empty for your first line>"}`;
 }
 
-async function pickModel(key) {
-  const saved = ls.get(MODEL); if (saved) return saved;
-  const r = await fetch(`${API}/models?key=${encodeURIComponent(key)}`);
-  if (!r.ok) throw new Error("Key rejected (" + r.status + ")");
-  const { models = [] } = await r.json();
-  const ok = models.filter(m => (m.supportedGenerationMethods || []).includes("generateContent") && /flash/.test(m.name) && !/lite|image|tts|live|audio|thinking|exp/.test(m.name));
-  const ver = m => parseFloat((/gemini-(\d+(\.\d+)?)/.exec(m.name) || [0, 0])[1]);
-  ok.sort((a, b) => ver(b) - ver(a));
-  const name = (ok[0] || models[0] || {}).name;
-  if (!name) throw new Error("No usable model found for this key");
-  ls.set(MODEL, name.replace(/^models\//, ""));
-  return ls.get(MODEL);
+// Models to try, best first: the last one that worked, then stable "flash" models (newest
+// first), then previews, then "flash-lite". Free-tier limits and busy errors are per model, so
+// when one is overloaded (503) or out of quota (429) the next one usually works.
+async function candidates(key) {
+  let list = [];
+  try { list = JSON.parse(ls.get(MODEL + "-list") || "[]"); } catch (_) {}
+  if (!list.length) {
+    const r = await fetch(`${API}/models?key=${encodeURIComponent(key)}&pageSize=200`);
+    if (r.status === 400 || r.status === 403) throw new Error("Google didn't accept this key. Check it in AI Studio, or remove it below and paste it again.");
+    if (!r.ok) throw new Error("Couldn't reach Gemini (" + r.status + "). Try again in a minute.");
+    const { models = [] } = await r.json();
+    const ver = n => parseFloat((/gemini-(\d+(\.\d+)?)/.exec(n) || [0, 0])[1]);
+    const rank = n => (/preview|exp/.test(n) ? 1 : 0) + (/lite/.test(n) ? 2 : 0);
+    list = models.filter(m => (m.supportedGenerationMethods || []).includes("generateContent") && /gemini-[\d.]+-flash/.test(m.name) && !/image|tts|live|audio|thinking|embedding/.test(m.name))
+      .map(m => m.name.replace(/^models\//, ""))
+      .sort((x, y) => rank(x) - rank(y) || ver(y) - ver(x));
+    if (!list.length) throw new Error("No usable Gemini model found for this key.");
+    ls.set(MODEL + "-list", JSON.stringify(list));
+  }
+  const good = ls.get(MODEL);
+  return good && list.includes(good) ? [good, ...list.filter(m => m !== good)] : list;
 }
 
-async function ask(key, scene, history) {
-  const model = await pickModel(key);
-  const r = await fetch(`${API}/models/${model}:generateContent?key=${encodeURIComponent(key)}`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: system(scene) }] }, contents: history, generationConfig: { responseMimeType: "application/json", temperature: 0.9 } }),
-  });
-  if (r.status === 404) { ls.set(MODEL, ""); throw new Error("Model not found; tap Send again to pick a new one"); }
-  if (r.status === 429) throw new Error("Free-tier limit reached for now. Try again in a minute.");
-  if (!r.ok) throw new Error("Gemini error " + r.status);
-  const j = await r.json();
-  const text = j.candidates?.[0]?.content?.parts?.map(p => p.text).join("") || "{}";
-  try { return JSON.parse(text); } catch (_) { return { reply: text, standard: "", en: "", coach: "" }; }
+const wait = ms => new Promise(r => setTimeout(r, ms));
+export async function ask(key, scene, history, onTry = () => {}) {
+  const body = JSON.stringify({ systemInstruction: { parts: [{ text: system(scene) }] }, contents: history, generationConfig: { responseMimeType: "application/json", temperature: 0.9 } });
+  let last = "";
+  for (const model of (await candidates(key)).slice(0, 4)) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      onTry(model, attempt);
+      let r;
+      try { r = await fetch(`${API}/models/${model}:generateContent?key=${encodeURIComponent(key)}`, { method: "POST", headers: { "content-type": "application/json" }, body }); }
+      catch (_) { last = "network"; await wait(1500); continue; }
+      if (r.ok) {
+        ls.set(MODEL, model);
+        const j = await r.json();
+        const text = j.candidates?.[0]?.content?.parts?.map(p => p.text).join("") || "{}";
+        try { return JSON.parse(text); } catch (_) { return { reply: text, standard: "", en: "", coach: "" }; }
+      }
+      last = r.status;
+      if (r.status === 400 || r.status === 403) throw new Error("Google didn't accept this key (" + r.status + ").");
+      if (r.status === 404) { ls.set(MODEL + "-list", ""); break; }   // model retired: refresh the list next time
+      if (r.status === 429) break;                                     // this model's free quota is used up: next model
+      await wait(1500 * (attempt + 1));                                // 500/503 busy: wait, retry once, then next model
+    }
+  }
+  throw new Error(last === 429 ? "Free-tier limit reached on every model for now. Try again in a few minutes."
+    : last === "network" ? "No connection to Gemini. Check your internet." : "Gemini is busy right now (" + last + "). Try again in a minute.");
 }
 
 export function renderPartner(view) {
@@ -71,7 +93,7 @@ export function renderPartner(view) {
   }
   view.replaceChildren(el("h1", {}, "Conversation partner"), el("p", { class: "muted" }, "Pick a situation. Talk with the mic or type. Tap a line to see it written."),
     el("div", { class: "scenes" }, ...SCENES.map(s => el("button", { class: "scene", onclick: () => chat(view, s, key) }, el("b", {}, s.title)))),
-    el("button", { class: "link", onclick: () => { ls.set(KEY, ""); ls.set(MODEL, ""); renderPartner(view); } }, "Remove my key from this browser"));
+    el("button", { class: "link", onclick: () => { ls.set(KEY, ""); ls.set(MODEL, ""); ls.set(MODEL + "-list", ""); renderPartner(view); } }, "Remove my key from this browser"));
 }
 
 function chat(view, scene, key) {
@@ -101,12 +123,12 @@ function chat(view, scene, key) {
     if (text) { history.push({ role: "user", parts: [{ text }] }); log.append(el("div", { class: "bubble me" }, text)); turns++; }
     else history.push({ role: "user", parts: [{ text: "(Start the conversation with your first line.)" }] });
     send.disabled = true;
-    const wait = el("div", { class: "bubble them typing" }, "…"); log.append(wait);
+    const typing = el("div", { class: "bubble them typing" }, "…"); log.append(typing); let tries = 0;
     try {
-      const r = await ask(key, scene, history);
+      const r = await ask(key, scene, history, m => { if (tries++) typing.textContent = "… Gemini is busy, trying " + m; });
       history.push({ role: "model", parts: [{ text: JSON.stringify(r) }] });
-      wait.remove(); them(r);
-    } catch (e) { wait.remove(); history.pop(); toast(e.message, 6000); }
+      typing.remove(); them(r);
+    } catch (e) { typing.remove(); history.pop(); toast(e.message, 6000); }
     send.disabled = false;
   }
   send.onclick = () => { const t = inp.value.trim(); if (t) { inp.value = ""; go(t); } };
