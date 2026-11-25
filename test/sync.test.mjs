@@ -75,3 +75,30 @@ console.log("ok - newer settings edit reaches the other device");
   assert.equal(surface.m.get("settings").goal, 50, "newer local settings kept");
   console.log("ok - repair downloads the missing lesson, keeps newer local data, reports:", r.bad.join(" | "));
 }
+
+// The automatic check opens only files it hasn't checked before (or that changed since).
+{
+  const { repair } = await import("../app/js/appsync.js");
+  const { sealJSON, unsealJSON } = await import("../../InkNotes/app/js/crypt.js");
+  const d = strictDrive();
+  let reads = 0; const read = d.read.bind(d); d.read = (...a) => { reads++; return read(...a); };
+  const put = async (name, rec) => d.write("dimelo", name, await sealJSON(key, rec, "dimelo/" + name));
+  await put("lesson~u-s~0.json", { id: "lesson~u-s~0", best: 100, updated: 200 });
+  await put("day~2026-11-25~ph0ne.json", { id: "day~2026-11-25~ph0ne", xp: 20, updated: 210 });
+  let mem = {}; const seen = { get: () => ({ ...mem }), set: v => { mem = v; } };
+  const surface = device();
+  const deps = { drive: d, unsealJSON, key, st: surface, seen };
+
+  let r = await repair(deps, { onlyChanged: true });
+  assert.equal(r.got, 2); assert.equal(reads, 2);
+  r = await repair(deps, { onlyChanged: true });
+  assert.equal(r.opened, 0); assert.equal(reads, 2, "nothing new: no files opened");
+  // the phone finishes another lesson and earns more XP today
+  await put("lesson~u-s~1.json", { id: "lesson~u-s~1", best: 90, updated: 300 });
+  await put("day~2026-11-25~ph0ne.json", { id: "day~2026-11-25~ph0ne", xp: 45, updated: 310 });
+  r = await repair(deps, { onlyChanged: true });
+  assert.equal(r.opened, 2); assert.equal(r.got, 2); assert.equal(reads, 4);
+  assert.equal(surface.m.get("day:2026-11-25:ph0ne").xp, 45);
+  assert.ok(surface.m.get("lesson:u-s:1"));
+  console.log("ok - automatic check opens only new or changed files (4 reads over 3 checks)");
+}

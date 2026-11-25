@@ -35,20 +35,47 @@ export async function startSync() {
   const syncUI = ui.mountSyncUI({ sync, button: btn, appName: "your Spanish progress", toast: (await import("./ui.js")).toast, isMain: () => true });
   store.setSyncHook(() => sync.soon());
   await sync.start({ allowRedirect: true, onStatus: st => syncUI.render(st) });
+  autoCheck();
 }
 
-// Repair: list the OneDrive folder in full (not through the saved change feed), open every file,
-// and keep anything newer than this device's copy. Returns { got, same, bad: [reasons] }.
-// deps lets the test pass a pretend drive; normally it uses InkNotes' OneDrive code and key.
-export async function repair(deps = null) {
+// The backup check for other devices' changes: on open, when the app comes back on screen, and
+// every minute while it's showing. Quiet: problems show up only in Sync details.
+let checking = false, lastCheck = 0;
+async function checkNow() {
+  if (checking || !sync || !sync.account() || !navigator.onLine || document.visibilityState !== "visible") return;
+  if (Date.now() - lastCheck < 20e3) return;
+  checking = true; lastCheck = Date.now();
+  try { await repair(null, { onlyChanged: true }); } catch (_) { /* no passphrase yet, offline, ... */ }
+  checking = false;
+}
+function autoCheck() {
+  setTimeout(checkNow, 3000);
+  document.addEventListener("visibilitychange", () => setTimeout(checkNow, 1500));
+  setInterval(checkNow, 60e3);
+}
+
+// Repair: list the OneDrive folder in full (not through the saved change feed), open the files,
+// and keep anything newer than this device's copy. Returns { got, same, bad: [reasons], opened }.
+// The regular sync sometimes misses files other devices upload (its change feed can go stale), so
+// this also runs by itself: with onlyChanged, it opens only files whose version (etag) it hasn't
+// checked before, so most runs are one folder listing and nothing else.
+// deps lets the test pass a pretend drive and memory; normally InkNotes' OneDrive code and key.
+const SEEN_KEY = "dimelo-checked-files";
+const lsSeen = {
+  get() { try { return JSON.parse(localStorage.getItem(SEEN_KEY) || "{}"); } catch (_) { return {}; } },
+  set(v) { try { localStorage.setItem(SEEN_KEY, JSON.stringify(v)); } catch (_) {} },
+};
+export async function repair(deps = null, { onlyChanged = false } = {}) {
   if (!deps) {
     const [{ graphDrive }, { unsealJSON }, ink] = await Promise.all([import("/inknotes/js/graph.js"), import("/inknotes/js/crypt.js"), import("/inknotes/js/store.js")]);
     const key = await ink.store.getMeta("key");
     if (!key) throw new Error("This device doesn't have the sync passphrase yet. Tap ☁️ to enter it.");
-    deps = { drive: graphDrive, unsealJSON, key, st: store };
+    deps = { drive: graphDrive, unsealJSON, key, st: store, seen: lsSeen };
   }
-  const { drive, unsealJSON, key, st } = deps;
-  const files = (await drive.list("dimelo")).filter(f => f.name.endsWith(".json"));
+  const { drive, unsealJSON, key, st, seen = lsSeen } = deps;
+  const checked = seen.get();
+  const all = (await drive.list("dimelo")).filter(f => f.name.endsWith(".json"));
+  const files = onlyChanged ? all.filter(f => !f.etag || checked[f.name] !== f.etag) : all;
   let got = 0, same = 0, next = 0;
   const bad = [];
   const one = async f => {
@@ -58,10 +85,12 @@ export async function repair(deps = null) {
       if (!r || fromDriveId(r.id || "") !== id) { bad.push(`${f.name}: the record inside is named “${r && r.id}”`); return; }
       const l = st.get(id);
       if (!l || (r.updated || 0) > (l.updated || 0)) { await st.put({ ...r, id }, { fromSync: true }); got++; } else same++;
+      if (f.etag) checked[f.name] = f.etag;
     } catch (e) { bad.push(`${f.name}: ${e.name === "OperationError" ? "couldn't decrypt (different passphrase?)" : e.message}`); }
   };
   await Promise.all(Array.from({ length: 6 }, async () => { while (next < files.length) await one(files[next++]); }));
-  return { got, same, bad };
+  seen.set(checked);
+  return { got, same, bad, opened: files.length };
 }
 
 // Me → Sync details: what this device has, what OneDrive has, and buttons to sync or re-download.
