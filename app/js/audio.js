@@ -60,22 +60,27 @@ export function say(text, { rate = 1 } = {}) {
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 export const canListen = !!SR;
 let rec = null;
-export function stopListening() { if (rec) try { rec.stop(); } catch (_) {} }
+// Stops listening and throws away anything heard, so an old question never gets graded later.
+let drop = null;
+export function stopListening() { if (drop) drop(); if (rec) try { rec.abort(); } catch (_) {} rec = null; }
 // Resolves with the list of things it may have heard (best first), or [] if nothing.
 export function listen({ onInterim } = {}) {
   if (!SR) return Promise.reject(new Error("no-sr"));
-  stop();
+  stop(); stopListening();
   return new Promise((res, rej) => {
+    let over = false;
+    drop = () => { over = true; res([]); };
     rec = new SR();
     rec.lang = "es-DO"; rec.interimResults = true; rec.maxAlternatives = 5; rec.continuous = false;
     let finals = [];
     rec.onresult = e => {
+      if (over) return;
       const r = e.results[e.results.length - 1];
       if (r.isFinal) finals = Array.from(r).map(a => a.transcript);
       else if (onInterim) onInterim(r[0].transcript);
     };
-    rec.onerror = e => { if (e.error === "no-speech" || e.error === "aborted") res([]); else rej(new Error(e.error)); };
-    rec.onend = () => { rec = null; res(finals); };
+    rec.onerror = e => { if (over || e.error === "no-speech" || e.error === "aborted") res([]); else rej(new Error(e.error)); };
+    rec.onend = () => { if (!over) { rec = null; drop = null; } res(over ? [] : finals); };
     rec.start();
   });
 }

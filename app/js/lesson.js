@@ -97,7 +97,7 @@ export function runLesson({ title, queue, onDone, timed = 0, xpEach = 1, bonus =
   document.body.classList.add("in-lesson");
 
   const total0 = queue.length;
-  let i = 0, correct = 0, wrong = 0, streakNow = 0, best = 0, xp = 0, ended = false;
+  let turn = 0, i = 0, correct = 0, wrong = 0, streakNow = 0, best = 0, xp = 0, ended = false;
   const graded = new Set(), requeued = new Set(), started = Date.now();
   let endAt = timed ? Date.now() + timed * 1000 : 0, tick = 0;
   if (timed) tick = setInterval(() => { const left = Math.max(0, Math.ceil((endAt - Date.now()) / 1000)); timer.textContent = `⏱ ${left}s`; if (!left) finish(); }, 250);
@@ -117,9 +117,12 @@ export function runLesson({ title, queue, onDone, timed = 0, xpEach = 1, bonus =
     progress();
     if (ended) return;
     if (i >= queue.length) return timed ? refill() : finish();
-    const ex = queue[i];
+    const ex = queue[i], my = ++turn;
+    audio.stopListening();
     body.replaceChildren(); foot.replaceChildren(); foot.className = "lfoot";
-    TYPES[ex.type](ex, body, foot, result, () => { i++; next(); });
+    let answered = false;   // a late answer from an earlier question (e.g. the mic) is ignored
+    const answer = (...a) => { if (my !== turn || answered || ended) return; answered = true; return result(...a); };
+    TYPES[ex.type](ex, body, foot, answer, () => { if (my === turn) { i++; next(); } });
   }
   function refill() { queue.push(...practiceQueue(10).map(x => ({ ...x, type: "hear-meaning", skill: "rec" }))); if (i >= queue.length) finish(); else next(); }
 
@@ -323,6 +326,7 @@ const TYPES = {
       el("div", { class: "prompt-text en" }, ex.it.en), mic, heard, el("div", { class: "row-links" }, typeInstead, cantNow));
     let tries = 0;
     const finish = (said, skip) => {
+      audio.stopListening(); mic.disabled = true; mic.classList.remove("on");
       const score = skip ? 0 : bestOf(said, [ex.it.es, ex.it.fast]);
       const ok = score >= 0.75;
       done(ex, ok, { rating: score >= 0.9 ? 3 : 2, answer: answerView(ex.it),
@@ -330,6 +334,7 @@ const TYPES = {
         note: ok && score < 0.9 ? "Understood! A word or two was off." : "" });
     };
     mic.onclick = async () => {
+      if (mic.disabled) return;
       mic.classList.add("on"); heard.textContent = "Listening…";
       try {
         const alts = await audio.listen({ onInterim: t => (heard.textContent = t) });
