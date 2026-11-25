@@ -82,10 +82,14 @@ export function listen({ onInterim } = {}) {
 
 // ---- record yourself (shadowing) ----
 export async function record(maxMs = 8000) {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  // No echo cancellation / noise suppression: on Android those put the phone into "call" mode,
+  // which moves all sound to the earpiece at call volume. Nothing plays while recording, so
+  // they aren't needed here.
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   const mr = new MediaRecorder(stream), chunks = [];
   mr.ondataavailable = e => chunks.push(e.data);
-  const done = new Promise(res => { mr.onstop = () => { stream.getTracks().forEach(t => t.stop()); res(new Blob(chunks, { type: mr.mimeType })); }; });
+  // release the mic, then give the phone a moment to route sound back to the speaker
+  const done = new Promise(res => { mr.onstop = () => { stream.getTracks().forEach(t => t.stop()); setTimeout(() => res(new Blob(chunks, { type: mr.mimeType })), 400); }; });
   mr.start();
   const t = setTimeout(() => mr.state !== "inactive" && mr.stop(), maxMs);
   return { stop: () => { clearTimeout(t); if (mr.state !== "inactive") mr.stop(); return done; }, done };
